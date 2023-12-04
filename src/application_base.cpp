@@ -47,6 +47,12 @@ ApplicationBase::ApplicationBase(const char* title)
         }
     });
 
+    // Scale the frame buffer for high DPI displays.
+    float scaleX, scaleY;
+    glfwGetWindowContentScale(this->m_window, &scaleX, &scaleY);
+    this->m_window_width = static_cast<uint32_t>(scaleX * this->m_window_width);
+    this->m_window_height = static_cast<uint32_t>(scaleY * this->m_window_height);
+
     // Init WebGPU
     this->m_instance = wgpu::createInstance({ wgpu::Default });
     if (!this->m_instance) {
@@ -297,6 +303,12 @@ void ApplicationBase::on_resize()
 
     int width, height;
     glfwGetWindowSize(this->m_window, &width, &height);
+
+    float scaleX, scaleY;
+    glfwGetWindowContentScale(this->m_window, &scaleX, &scaleY);
+
+    width = static_cast<int>(scaleX * width);
+    height = static_cast<int>(scaleY * height);
 
     if ((width == 0 && height == 0) || (static_cast<uint32_t>(width) == this->m_window_width && static_cast<uint32_t>(height) == this->m_window_height)) {
         return;
