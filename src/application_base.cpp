@@ -316,6 +316,16 @@ const wgpu::Device& ApplicationBase::device() const
     return this->m_device;
 }
 
+uint32_t ApplicationBase::surface_width() const
+{
+    return this->m_window_width;
+}
+
+uint32_t ApplicationBase::surface_height() const
+{
+    return this->m_window_height;
+}
+
 wgpu::TextureFormat ApplicationBase::surface_format() const
 {
     return this->m_surface_format;
