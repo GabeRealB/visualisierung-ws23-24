@@ -372,25 +372,104 @@ void Application::init_slice_texture()
 
 float Application::interpolate_trilinear(VoxelCell cell, float t_x, float t_y, float t_z) const
 {
-    /// Replace with the interpolation
-    return (t_x + t_y + t_z) / 3.0f;
+    float bottom_front = (cell.bottom_front_left * (1.0f - t_x)) + (cell.bottom_front_right * t_x);
+    float bottom_back = (cell.bottom_back_left * (1.0f - t_x)) + (cell.bottom_back_right * t_x);
+    float top_front = (cell.top_front_left * (1.0f - t_x)) + (cell.top_front_right * t_x);
+    float top_back = (cell.top_back_left * (1.0f - t_x)) + (cell.top_back_right * t_x);
+
+    float bottom = (bottom_front * (1.0f - t_y)) + (bottom_back * t_y);
+    float top = (top_front * (1.0f - t_y)) + (top_back * t_y);
+
+    return (bottom * (1.0f - t_z)) + (top * t_z);
 }
 
 Color Application::sample_transfer_function(float t) const
 {
-    /// Replace with the transfer function.
-    return Color { .r = 0, .g = 255, .b = 255, .a = 255 };
+    uint8_t value = static_cast<uint8_t>(t * 255.0);
+    return Color {
+        .r = value,
+        .g = value,
+        .b = value,
+        .a = 255
+    };
 }
 
 Color Application::color_at_position(const PVMVolume& volume, glm::vec3 position) const
 {
-    /// Replace with the sampling.
-    return Color { .r = 0, .g = 255, .b = 0, .a = 255 };
+    auto extents = volume.extents();
+    glm::vec3 extents_float { glm::vec3 { extents.x, extents.y, extents.z } - glm::vec3 { 1.0f } };
+
+    glm::vec3 min_position = glm::floor(position);
+    if (glm::any(glm::greaterThan(glm::vec3 { 0 }, min_position))) {
+        return Color {
+            .r = 255,
+            .g = 0,
+            .b = 0,
+            .a = 255,
+        };
+    }
+
+    glm::vec3 max_position = glm::ceil(position);
+    if (glm::any(glm::greaterThan(max_position, extents_float))) {
+        return Color {
+            .r = 255,
+            .g = 0,
+            .b = 0,
+            .a = 255,
+        };
+    }
+
+    glm::vec3 ts = glm::fract(position);
+    float t_x = ts.x;
+    float t_y = ts.y;
+    float t_z = ts.z;
+
+    std::size_t x = static_cast<std::size_t>(min_position.x);
+    std::size_t y = static_cast<std::size_t>(min_position.y);
+    std::size_t z = static_cast<std::size_t>(min_position.z);
+
+    std::size_t x_max = static_cast<std::size_t>(max_position.x);
+    std::size_t y_max = static_cast<std::size_t>(max_position.y);
+    std::size_t z_max = static_cast<std::size_t>(max_position.z);
+
+    float bottom_front_left = volume.voxel_normalized(x, y, z);
+    float bottom_front_right = volume.voxel_normalized(x_max, y, z);
+    float bottom_back_left = volume.voxel_normalized(x, y_max, z);
+    float bottom_back_right = volume.voxel_normalized(x_max, y_max, z);
+    float top_front_left = volume.voxel_normalized(x, y, z_max);
+    float top_front_right = volume.voxel_normalized(x_max, y, z_max);
+    float top_back_left = volume.voxel_normalized(x, y_max, z_max);
+    float top_back_right = volume.voxel_normalized(x_max, y_max, z_max);
+    VoxelCell cell {
+        .bottom_front_left = bottom_front_left,
+        .bottom_front_right = bottom_front_right,
+        .bottom_back_left = bottom_back_left,
+        .bottom_back_right = bottom_back_right,
+        .top_front_left = top_front_left,
+        .top_front_right = top_front_right,
+        .top_back_left = top_back_left,
+        .top_back_right = top_back_right,
+    };
+    float value = this->interpolate_trilinear(cell, t_x, t_y, t_z);
+    return this->sample_transfer_function(value);
 }
 
 void Application::compute_slice(const PVMVolume& volume, std::span<Color> color_buffer, Plane plane,
     uint32_t buffer_width, uint32_t buffer_height) const
 {
-    /// Replace with the implementation of the sampling.
-    std::fill(std::begin(color_buffer), std::end(color_buffer), Color { .r = 0, .g = 0, .b = 255, .a = 255 });
+    glm::vec3 top_vector { (plane.top_left - plane.bottom_left) / static_cast<float>(buffer_height) };
+    glm::vec3 right_vector { (plane.bottom_right - plane.bottom_left) / static_cast<float>(buffer_width) };
+
+    for (uint32_t y { 0 }; y < buffer_height; ++y) {
+        for (uint32_t x { 0 }; x < buffer_width; ++x) {
+            glm::vec3 top_offset = static_cast<float>(y) * top_vector;
+            glm::vec3 right_offset = static_cast<float>(x) * right_vector;
+            glm::vec3 pos { plane.bottom_left + right_offset + top_offset };
+
+            Color color { this->color_at_position(volume, pos) };
+
+            std::size_t index { x + (y * buffer_width) };
+            color_buffer[index] = color;
+        }
+    }
 }
