@@ -67,8 +67,9 @@ ApplicationBase::ApplicationBase(const char* title)
     }
 
     wgpu::RequestAdapterOptions adapter_opts { wgpu::Default };
+    adapter_opts.powerPreference = wgpu::PowerPreference::HighPerformance;
     adapter_opts.compatibleSurface = this->m_surface;
-    auto adapter = this->m_instance.requestAdapter({});
+    auto adapter = this->m_instance.requestAdapter(adapter_opts);
     if (!adapter) {
         std::cerr << "Could not create WebGPU adapter!" << std::endl;
         std::exit(EXIT_FAILURE);
