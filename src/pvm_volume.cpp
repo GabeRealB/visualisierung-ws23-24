@@ -181,6 +181,14 @@ glm::vec3 PVMVolume::scale() const
     return glm::vec3 { this->m_scale_x, this->m_scale_y, this->m_scale_z };
 }
 
+glm::vec2 PVMVolume::component_range(std::size_t component) const
+{
+    if (component >= this->m_components) {
+        throw std::out_of_range("component index out of range");
+    }
+    return this->m_component_ranges[component];
+}
+
 glm::vec3 PVMVolume::voxel_position_start(std::size_t x, std::size_t y, std::size_t z) const
 {
     glm::vec3 idx_f { static_cast<float>(x), static_cast<float>(y), static_cast<float>(z) };

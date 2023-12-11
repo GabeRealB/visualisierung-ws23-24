@@ -89,6 +89,13 @@ public:
     glm::vec3 scale() const;
 
     /**
+     * Returns the value range of a component.
+     * @param component voxel component
+     * @return component min/max
+     */
+    glm::vec2 component_range(std::size_t component) const;
+
+    /**
      * Returns the start position of the voxel.
      * @param x x grid position
      * @param y y grid position
