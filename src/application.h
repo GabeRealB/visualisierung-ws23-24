@@ -79,10 +79,8 @@ enum class SlicePlane {
  * right.
  */
 struct alignas(8) IsoContourLine {
-    float start_x;
-    float start_y;
-    float end_x;
-    float end_y;
+    glm::vec2 start;
+    glm::vec2 end;
 };
 
 class Application final : public ApplicationBase {

@@ -149,12 +149,19 @@ void Application::on_frame(wgpu::CommandEncoder& encoder, wgpu::TextureView& fra
         this->m_plane_offset = 0.0f;
     }
 
+    auto iso_value_range = this->m_volume->component_range(0);
+    bool iso_value_changed = ImGui::SliderFloat("Iso-value", &this->m_iso_value, iso_value_range.x, iso_value_range.y);
+
     ImGui::End();
 
     bool update_slice_texture = this->m_slice_texture_changed || dataset_changed || plane_changed;
     this->m_slice_texture_changed = false;
     if (update_slice_texture) {
         this->update_slice_samples_and_texture();
+    }
+
+    if (update_slice_texture || iso_value_changed) {
+        this->update_iso_contours();
     }
 
     wgpu::TextureView slice_texture_view = this->m_slice_texture.createView();
@@ -741,12 +748,117 @@ void Application::color_slice(std::span<const float> samples, std::span<Color> c
 void Application::compute_marching_squares_cell(std::vector<IsoContourLine>& lines, Cell2D cell, float iso_value,
     glm::vec2 cell_start, glm::vec2 cell_size) const
 {
-    // Implement method.
+    int case_num { 0 };
+    case_num |= 0b0001 * (cell.bottom_left > iso_value);
+    case_num |= 0b0010 * (cell.bottom_right > iso_value);
+    case_num |= 0b0100 * (cell.top_right > iso_value);
+    case_num |= 0b1000 * (cell.top_left > iso_value);
+
+    if (case_num > 15) {
+        std::cerr << "Invalid case " << case_num << std::endl;
+    }
+
+    std::array<glm::vec2, 4> ms_vertices {
+        cell_start,
+        cell_start + glm::vec2 { cell_size.x, 0.0 },
+        cell_start + glm::vec2 { cell_size.x, cell_size.y },
+        cell_start + glm::vec2 { 0.0, cell_size.y },
+    };
+
+    constexpr std::array<std::array<int, 2>, 4> ms_edges {
+        std::array<int, 2> { 0, 1 },
+        std::array<int, 2> { 1, 2 },
+        std::array<int, 2> { 2, 3 },
+        std::array<int, 2> { 3, 0 },
+    };
+
+    constexpr std::array<std::array<int, 4>, 16> ms_cases {
+        std::array<int, 4> { -1, -1, -1, -1 },
+        std::array<int, 4> { 0, 3, -1, -1 },
+        std::array<int, 4> { 0, 1, -1, -1 },
+        std::array<int, 4> { 1, 3, -1, -1 },
+        std::array<int, 4> { 1, 2, -1, -1 },
+        std::array<int, 4> { 0, 1, 2, 3 },
+        std::array<int, 4> { 0, 2, -1, -1 },
+        std::array<int, 4> { 2, 3, -1, -1 },
+        std::array<int, 4> { 2, 3, -1, -1 },
+        std::array<int, 4> { 0, 2, -1, -1 },
+        std::array<int, 4> { 0, 3, 1, 2 },
+        std::array<int, 4> { 1, 2, -1, -1 },
+        std::array<int, 4> { 1, 3, -1, -1 },
+        std::array<int, 4> { 0, 1, -1, -1 },
+        std::array<int, 4> { 0, 3, -1, -1 },
+        std::array<int, 4> { -1, -1, -1, -1 },
+    };
+
+    std::array<float, 4> values { cell.bottom_left, cell.bottom_right, cell.top_right, cell.top_left };
+    for (int i { 0 }; i < 4; i += 2) {
+        int start_edge { ms_cases[case_num][i] };
+        int end_edge { ms_cases[case_num][i + 1] };
+        if (start_edge == -1) {
+            break;
+        }
+
+        int start_idx_0 { ms_edges[start_edge][0] };
+        int start_idx_1 { ms_edges[start_edge][1] };
+        int end_idx_0 { ms_edges[end_edge][0] };
+        int end_idx_1 { ms_edges[end_edge][1] };
+
+        float start_sample_1 { values[start_idx_0] };
+        float start_sample_2 { values[start_idx_1] };
+        float end_sample_1 { values[end_idx_0] };
+        float end_sample_2 { values[end_idx_1] };
+
+        float start_t { (start_sample_1 - iso_value) / (start_sample_1 - start_sample_2) };
+        float end_t { (end_sample_1 - iso_value) / (end_sample_1 - end_sample_2) };
+
+        glm::vec2 start_position_0 { ms_vertices[start_idx_0] };
+        glm::vec2 start_position_1 { ms_vertices[start_idx_1] };
+        glm::vec2 end_position_0 { ms_vertices[end_idx_0] };
+        glm::vec2 end_position_1 { ms_vertices[end_idx_1] };
+
+        glm::vec2 line_start { start_position_0 + ((1.0f - start_t) * (start_position_1 - start_position_0)) };
+        glm::vec2 line_end { end_position_0 + ((1.0f - end_t) * (end_position_1 - end_position_0)) };
+
+        lines.push_back(IsoContourLine { line_start, line_end });
+    }
 }
 
 std::vector<IsoContourLine> Application::compute_iso_contours(std::span<const float> samples, uint32_t width,
     uint32_t height, float iso_value, glm::vec2 iso_range) const
 {
-    // Replace with implementation.
-    return { IsoContourLine { .start_x = 0.0, .start_y = 0.0, .end_x = 1.0, .end_y = 1.0 } };
+    std::vector<IsoContourLine> lines {};
+    float normalized_iso_value = (iso_value - iso_range.x) / (iso_range.y - iso_range.x);
+    glm::vec2 cell_size {
+        1.0 / static_cast<float>(width - 1),
+        1.0 / static_cast<float>(height - 1),
+    };
+
+    for (uint32_t y { 0 }; y < height - 1; y++) {
+        for (uint32_t x { 0 }; x < width - 1; x++) {
+            std::size_t bottom_left_idx { x + (y * width) };
+            std::size_t bottom_right_idx { (x + 1) + (y * width) };
+            std::size_t top_left_idx { x + ((y + 1) * width) };
+            std::size_t top_right_idx { (x + 1) + ((y + 1) * width) };
+
+            float bottom_left = samples[bottom_left_idx];
+            float bottom_right = samples[bottom_right_idx];
+            float top_left = samples[top_left_idx];
+            float top_right = samples[top_right_idx];
+            Cell2D cell {
+                .top_left = top_left,
+                .top_right = top_right,
+                .bottom_left = bottom_left,
+                .bottom_right = bottom_right
+            };
+
+            glm::vec2 cell_start {
+                static_cast<float>(x) / static_cast<float>(width),
+                static_cast<float>(y) / static_cast<float>(height),
+            };
+            this->compute_marching_squares_cell(lines, cell, normalized_iso_value, cell_start, cell_size);
+        }
+    }
+
+    return lines;
 }
