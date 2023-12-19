@@ -19,6 +19,8 @@ ApplicationBase::ApplicationBase(const char* title)
     , m_error_callback { nullptr }
     , m_device { nullptr }
     , m_surface_format { wgpu::TextureFormat::Undefined }
+    , m_depth_stencil_format { wgpu::TextureFormat::Depth24Plus }
+    , m_depth_stencil_texture { nullptr }
     , m_window_width { 1280 }
     , m_window_height { 720 }
 {
@@ -137,6 +139,7 @@ ApplicationBase::ApplicationBase(const char* title)
     };
     this->m_error_callback = this->m_device.setUncapturedErrorCallback(on_device_error);
     this->configure_surface();
+    this->configure_depth_stencil();
 
     // Init Dear ImGUI
     IMGUI_CHECKVERSION();
@@ -158,6 +161,8 @@ ApplicationBase::ApplicationBase(ApplicationBase&& app)
     , m_error_callback { std::exchange(app.m_error_callback, nullptr) }
     , m_device { std::exchange(app.m_device, nullptr) }
     , m_surface_format { std::exchange(app.m_surface_format, wgpu::TextureFormat::Undefined) }
+    , m_depth_stencil_format { std::exchange(app.m_depth_stencil_format, wgpu::TextureFormat::Depth24Plus) }
+    , m_depth_stencil_texture { std::exchange(app.m_depth_stencil_texture, nullptr) }
     , m_window_width { std::exchange(app.m_window_width, 0) }
     , m_window_height { std::exchange(app.m_window_height, 0) }
 {
@@ -173,6 +178,11 @@ ApplicationBase::~ApplicationBase()
         ImGui_ImplWGPU_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext(this->m_imgui_context);
+    }
+
+    if (this->m_depth_stencil_texture) {
+        this->m_depth_stencil_texture.destroy();
+        this->m_depth_stencil_texture.release();
     }
 
     if (this->m_device) {
@@ -244,6 +254,7 @@ void ApplicationBase::run()
             std::exit(EXIT_FAILURE);
         }
         auto surface_texture_view = texture.createView();
+        auto depth_stencil_texture_view = this->m_depth_stencil_texture.createView();
 
         // Init a Dear ImGui frame.
         ImGui_ImplWGPU_NewFrame();
@@ -258,7 +269,7 @@ void ApplicationBase::run()
             std::exit(EXIT_FAILURE);
         }
 
-        this->on_frame(command_encoder, surface_texture_view);
+        this->on_frame(command_encoder, surface_texture_view, depth_stencil_texture_view);
 
         // Finish the Dear ImGui frame.
         auto color_attachments = std::array { wgpu::RenderPassColorAttachment { wgpu::Default } };
@@ -289,12 +300,13 @@ void ApplicationBase::run()
         imgui_pass_encoder.release();
         command_buffer.release();
         command_encoder.release();
+        depth_stencil_texture_view.release();
         surface_texture_view.release();
         texture.release();
     }
 }
 
-void ApplicationBase::on_frame(wgpu::CommandEncoder&, wgpu::TextureView&) { }
+void ApplicationBase::on_frame(wgpu::CommandEncoder&, wgpu::TextureView&, wgpu::TextureView&) { }
 
 void ApplicationBase::on_resize()
 {
@@ -317,6 +329,7 @@ void ApplicationBase::on_resize()
     this->m_window_width = static_cast<uint32_t>(width);
     this->m_window_height = static_cast<uint32_t>(height);
     this->configure_surface();
+    this->configure_depth_stencil();
 }
 
 wgpu::Device& ApplicationBase::device()
@@ -344,6 +357,11 @@ wgpu::TextureFormat ApplicationBase::surface_format() const
     return this->m_surface_format;
 }
 
+wgpu::TextureFormat ApplicationBase::depth_stencil_format() const
+{
+    return this->m_depth_stencil_format;
+}
+
 void ApplicationBase::configure_surface()
 {
     if (!this->m_device || !this->m_surface) {
@@ -359,6 +377,38 @@ void ApplicationBase::configure_surface()
     config.alphaMode = wgpu::CompositeAlphaMode::Opaque;
     config.device = this->m_device;
     this->m_surface.configure(config);
+}
+
+void ApplicationBase::configure_depth_stencil()
+{
+    if (!this->m_device || !this->m_surface) {
+        return;
+    }
+
+    if (this->m_depth_stencil_texture) {
+        this->m_depth_stencil_texture.release();
+        this->m_depth_stencil_texture = { nullptr };
+    }
+
+    wgpu::Device& device = this->device();
+    uint32_t width { this->surface_width() };
+    uint32_t height { this->surface_height() };
+
+    wgpu::TextureDescriptor desc { wgpu::Default };
+    desc.label = "depth stencil";
+    desc.usage = wgpu::TextureUsage::RenderAttachment;
+    desc.dimension = wgpu::TextureDimension::_2D;
+    desc.size = wgpu::Extent3D { width, height, 1 };
+    desc.format = this->m_depth_stencil_format;
+    desc.mipLevelCount = 1;
+    desc.sampleCount = 1;
+    desc.viewFormatCount = 0;
+    desc.viewFormats = nullptr;
+    this->m_depth_stencil_texture = device.createTexture(desc);
+    if (!this->m_depth_stencil_texture) {
+        std::cerr << "Could not create depth stencil texture!" << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
 }
 
 void ApplicationBase::inspect_adapter(wgpu::Adapter& adapter) const

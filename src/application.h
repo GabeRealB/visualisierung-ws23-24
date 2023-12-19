@@ -22,6 +22,10 @@ struct Color {
 /**
  * Grid values of a voxel cell.
  * Each value is in the range [0.0, 1.0].
+ *
+ * Left/Right corresponds to x/x+1
+ * Front/Back corresponds to y/y+1
+ * Bottom/Top corresponds to z/z+1
  */
 struct VoxelCell {
     float bottom_front_left;
@@ -83,6 +87,22 @@ struct alignas(8) IsoContourLine {
     glm::vec2 end;
 };
 
+/**
+ * A triangle in local coordinates.
+ *
+ * The position (0, 0, 0) corresponds to the position of the
+ * first grid point. The maximum position of
+ * volume_extents * volume_cell_size corresponds to the position
+ * of the last grid cell. The individual points spanning the
+ * triangle must be defined in counter-clockwise order, for
+ * example top left, bottom left, bottom right.
+ */
+struct IsoSurfaceTriangle {
+    glm::vec3 p0;
+    glm::vec3 p1;
+    glm::vec3 p2;
+};
+
 class Application final : public ApplicationBase {
 public:
     Application();
@@ -94,18 +114,26 @@ public:
     Application& operator=(Application&&) = delete;
 
 protected:
-    void on_frame(wgpu::CommandEncoder&, wgpu::TextureView&) override;
+    void on_frame(wgpu::CommandEncoder&, wgpu::TextureView&, wgpu::TextureView&) override;
     void on_resize() override;
 
 private:
     void init_slice_render_pipeline();
     void init_iso_contours_render_pipeline();
+    void init_iso_surface_render_pipeline();
 
     void init_slice_texture();
     void init_iso_contours_buffer();
+    void init_uniform_buffer();
+    void init_iso_surface_buffer();
+
+    void init_projection_matrix();
+    void init_view_matrix();
+    void init_model_matrix();
 
     void update_slice_samples_and_texture();
     void update_iso_contours();
+    void update_iso_surface();
 
     /**
      * Computes the value inside the cell by applying a trilinear interpolation
@@ -201,6 +229,36 @@ private:
     std::vector<IsoContourLine> compute_iso_contours(std::span<const float> samples, uint32_t width,
         uint32_t height, float iso_value, glm::vec2 iso_range) const;
 
+    /**
+     * Applies the marching cubes algorithm on a single cell.
+     *
+     * The cell and triangle positions are given in the local space of the volume,
+     * with position (0, 0, 0) corresponding to the position of the first grid value,
+     * and position (x, y, z) * cell_size corresponding to the position of the grid
+     * value (x, y, z).
+     *
+     * @param triangles triangles buffer
+     * @param cell cell to process
+     * @param iso_value normalized iso-value in the range [0.0, 1.0]
+     * @param cell_start start position of the cell
+     * @param cell_size size of the cell in local coordinate space
+     */
+    void compute_marching_cubes_cell(std::vector<IsoSurfaceTriangle>& triangles, VoxelCell cell,
+        float iso_value, glm::vec3 cell_start, glm::vec3 cell_size) const;
+
+    /**
+     * Computes the isosurface of the volume.
+     *
+     * The iso-value is given in the range [iso_range.x, iso_range.y].
+     *
+     * @param volume volume to sample from
+     * @param iso_value ios-value to compute the isosurface of
+     * @param iso_range minimum/maximum value of the iso-value
+     * @return triangles of the isosurface
+     */
+    std::vector<IsoSurfaceTriangle> compute_iso_surface(const PVMVolume& volume, float iso_value,
+        glm::vec2 iso_range) const;
+
     wgpu::ShaderModule m_slice_shader_module;
     wgpu::BindGroupLayout m_slice_bind_group_layout;
     wgpu::PipelineLayout m_slice_pipeline_layout;
@@ -211,6 +269,11 @@ private:
     wgpu::PipelineLayout m_iso_contours_pipeline_layout;
     wgpu::RenderPipeline m_iso_contours_render_pipeline;
 
+    wgpu::ShaderModule m_iso_surface_shader_module;
+    wgpu::BindGroupLayout m_iso_surface_bind_group_layout;
+    wgpu::PipelineLayout m_iso_surface_pipeline_layout;
+    wgpu::RenderPipeline m_iso_surface_render_pipeline;
+
     wgpu::Texture m_slice_texture;
     std::vector<float> m_slice_samples;
     bool m_slice_texture_changed;
@@ -218,11 +281,26 @@ private:
     wgpu::Buffer m_iso_contours_buffer;
     std::vector<IsoContourLine> m_iso_contour_lines;
 
+    wgpu::Buffer m_uniforms_buffer;
+    wgpu::Buffer m_iso_surface_vertex_buffer;
+    wgpu::Buffer m_iso_surface_index_buffer;
+    std::size_t m_vertex_count;
+    std::size_t m_index_count;
+
     std::optional<PVMVolume> m_volume;
     Dataset m_dataset;
+
+    glm::mat4 m_projection_mat;
+    glm::mat4 m_view_mat;
+    glm::mat4 m_model_mat;
+    glm::mat3 m_normal_mat;
+    glm::vec3 m_view_pos;
 
     SlicePlane m_plane;
     float m_plane_offset;
     float m_plane_rotation;
     float m_iso_value;
+    float m_camera_distance;
+    float m_camera_theta;
+    float m_camera_phi;
 };
