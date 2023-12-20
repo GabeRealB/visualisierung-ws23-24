@@ -935,6 +935,12 @@ void Application::init_projection_matrix()
 
 void Application::init_view_matrix()
 {
+    if (!this->m_volume.has_value()) {
+        this->m_view_pos = glm::vec3 { 0.0f };
+        this->m_view_mat = glm::identity<glm::mat4>();
+        return;
+    }
+
     float distance { this->m_camera_distance };
     float theta { this->m_camera_theta };
     float phi { this->m_camera_phi };
