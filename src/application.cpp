@@ -2097,5 +2097,95 @@ std::vector<IsoSurfaceTriangle> Application::compute_iso_surface(const PVMVolume
 ExtremaGraph<2> Application::compute_extrema_graph(std::span<const float> samples, uint32_t width,
     uint32_t height) const
 {
-    return ExtremaGraph<2> {};
+    std::vector<Extrema<2>> extrema {};
+    std::unordered_set<std::size_t> visited_cells {};
+    auto is_extremum = [&](size_t x, size_t y) {
+        size_t i = x + y * width;
+        float value = samples[i];
+
+        float min_value = std::numeric_limits<float>::max();
+        float max_value = std::numeric_limits<float>::min();
+        if (x > 0) {
+            size_t i2 = (x - 1) + y * width;
+            min_value = std::min(min_value, samples[i2]);
+            max_value = std::max(max_value, samples[i2]);
+        }
+        if (x < width - 1) {
+            size_t i2 = (x + 1) + y * width;
+            min_value = std::min(min_value, samples[i2]);
+            max_value = std::max(max_value, samples[i2]);
+        }
+        if (y > 0) {
+            size_t i2 = x + (y - 1) * width;
+            min_value = std::min(min_value, samples[i2]);
+            max_value = std::max(max_value, samples[i2]);
+        }
+        if (y < height - 1) {
+            size_t i2 = x + (y + 1) * width;
+            min_value = std::min(min_value, samples[i2]);
+            max_value = std::max(max_value, samples[i2]);
+        }
+
+        return value <= min_value || value >= max_value;
+    };
+    auto compute_extrema = [&](size_t x, size_t y) {
+        size_t i = x + y * width;
+        float value = samples[i];
+
+        size_t start_x = x;
+        size_t start_y = y;
+
+        constexpr size_t max_region_size = 128;
+
+        auto inserted = visited_cells.insert(i);
+        if (!inserted.second || !is_extremum(x, y)) {
+            return;
+        }
+        extrema.push_back(Extrema<2> { .pos = { x, y }, .value = value });
+
+        std::vector<std::pair<size_t, size_t>> stack {};
+        stack.emplace_back(x, y);
+
+        while (!stack.empty()) {
+            std::tie(x, y) = stack.back();
+            stack.pop_back();
+            i = x + y * width;
+
+            inserted = visited_cells.insert(i);
+            if (!(start_x == x && start_y == y) && !inserted.second) {
+                continue;
+            }
+
+            if (x > 0 && start_x - x < max_region_size) {
+                size_t i2 = (x - 1) + y * width;
+                if (value == samples[i2] && is_extremum(x - 1, y)) {
+                    stack.emplace_back(x - 1, y);
+                }
+            }
+            if (x < width - 1 && x - start_x < max_region_size) {
+                size_t i2 = (x + 1) + y * width;
+                if (value == samples[i2] && is_extremum(x + 1, y)) {
+                    stack.emplace_back(x + 1, y);
+                }
+            }
+            if (y > 0 && start_y - y < max_region_size) {
+                size_t i2 = x + (y - 1) * width;
+                if (value == samples[i2] && is_extremum(x, y - 1)) {
+                    stack.emplace_back(x, y - 1);
+                }
+            }
+            if (y < height - 1 && y - start_y < max_region_size) {
+                size_t i2 = x + (y + 1) * width;
+                if (value == samples[i2] && is_extremum(x, y + 1)) {
+                    stack.emplace_back(x, y + 1);
+                }
+            }
+        }
+    };
+    for (size_t y = 0; y < height; ++y) {
+        for (size_t x = 0; x < width; ++x) {
+            compute_extrema(x, y);
+        }
+    }
+    return ExtremaGraph<2> { extrema };
 }

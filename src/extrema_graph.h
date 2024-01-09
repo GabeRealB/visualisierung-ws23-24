@@ -189,6 +189,67 @@ template <size_t N>
 ExtremaGraph<N>::ExtremaGraph(std::vector<Extrema<N>>& extrema)
     : m_nodes {}
 {
+    // assign markers to extrema
+    for (size_t i = 0; i < extrema.size(); ++i) {
+        this->m_nodes.push_back(ExtremaNode<N> {
+            .extremum = extrema[i],
+            .marker_idx = i,
+            .neighbor_idxs = {},
+        });
+    }
+
+    auto lookup_group_leader = [&](size_t node_idx) {
+        const ExtremaNode<N>* current = &this->m_nodes[node_idx];
+        size_t current_idx = node_idx;
+        while (current->marker_idx != current_idx) {
+            current_idx = current->marker_idx;
+            current = &this->m_nodes[current_idx];
+        }
+
+        return current_idx;
+    };
+
+    // connect nodes
+    for (size_t node_idx = 0; node_idx < this->m_nodes.size(); ++node_idx) {
+        auto& node = this->m_nodes[node_idx];
+        size_t current_group_leader_idx = lookup_group_leader(node.marker_idx);
+
+        bool found = false;
+        size_t minimal_idx = -1;
+        size_t found_other_group_leader_idx = -1;
+        float minimal_distance = std::numeric_limits<float>::max();
+        for (size_t other_idx = 0; other_idx < this->m_nodes.size(); ++other_idx) {
+            auto& other = this->m_nodes[other_idx];
+            size_t other_group_leader_idx = lookup_group_leader(other.marker_idx);
+
+            if (current_group_leader_idx == other_group_leader_idx)
+                continue;
+
+            glm::vec<N, float> node_pos = node.extremum.pos;
+            glm::vec<N, float> other_node_pos = other.extremum.pos;
+            const float dist = glm::distance(node_pos, other_node_pos);
+            if (dist < minimal_distance) {
+                minimal_idx = other_idx;
+                minimal_distance = dist;
+                found_other_group_leader_idx = other_group_leader_idx;
+                found = true;
+            }
+        }
+
+        if (found) {
+            // we point the bigger group leader to the smaller one
+            auto& group_leader = this->m_nodes[current_group_leader_idx];
+            auto& other_group_leader = this->m_nodes[found_other_group_leader_idx];
+            if (group_leader.marker_idx < other_group_leader.marker_idx) {
+                other_group_leader.marker_idx = group_leader.marker_idx;
+            } else {
+                group_leader.marker_idx = other_group_leader.marker_idx;
+            }
+
+            // connect closest nodes uni-directionally
+            node.neighbor_idxs.push_back(minimal_idx);
+        }
+    }
 }
 
 template <size_t N>
@@ -197,5 +258,22 @@ std::vector<glm::vec<N, size_t>> ExtremaGraph<N>::query_starting_points(
     std::predicate<glm::vec<N, size_t>, float> auto& iso_value_in_cell) const
 {
     std::vector<glm::vec<N, size_t>> starting_points {};
+    for (auto& node : this->m_nodes) {
+        for (auto& neighbor_idx : node.neighbor_idxs) {
+            auto& neighbor = this->m_nodes[neighbor_idx];
+            float min = std::min(node.extremum.value, neighbor.extremum.value);
+            float max = std::max(node.extremum.value, neighbor.extremum.value);
+
+            if (min <= iso_value && iso_value <= max) {
+                const auto arc = calculate_arc(node, neighbor);
+                for (auto& cell : arc) {
+                    if (iso_value_in_cell(cell, iso_value)) {
+                        starting_points.push_back(cell);
+                        break;
+                    }
+                }
+            }
+        }
+    }
     return starting_points;
 }
