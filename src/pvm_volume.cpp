@@ -18,7 +18,7 @@ PVMVolume::PVMVolume(const std::filesystem::path& volume_path)
     , m_scale_y { 0.0f }
     , m_scale_z { 0.0f }
 {
-#ifdef _MSC_VER
+#ifdef _WIN32
     const char* c_volume_path = this->m_name.c_str();
 #else
     const char* c_volume_path = volume_path.c_str();

@@ -2,10 +2,13 @@
 
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <span>
+#include <tuple>
 #include <vector>
 
 #include <application_base.h>
+#include <extrema_graph.h>
 #include <pvm_volume.h>
 
 /**
@@ -120,12 +123,15 @@ protected:
 private:
     void init_slice_render_pipeline();
     void init_iso_contours_render_pipeline();
+    void init_extrema_graph_render_pipeline();
     void init_iso_surface_render_pipeline();
 
     void init_slice_texture();
     void init_iso_contours_buffer();
     void init_uniform_buffer();
     void init_iso_surface_buffer();
+
+    void init_extrema_graph_2d();
 
     void init_projection_matrix();
     void init_view_matrix();
@@ -212,7 +218,9 @@ private:
      * @param cell_size size of the cell
      */
     void compute_marching_squares_cell(std::vector<IsoContourLine>& lines, Cell2D cell,
-        float iso_value, glm::vec2 cell_start, glm::vec2 cell_size) const;
+        float iso_value, glm::vec2 cell_start, glm::vec2 cell_size,
+        glm::vec<2, std::uint32_t> cell_idx,
+        std::vector<std::tuple<uint32_t, uint32_t>>& cell_stack) const;
 
     /**
      * Computes the Isocontour of the sampled slice.
@@ -259,6 +267,17 @@ private:
     std::vector<IsoSurfaceTriangle> compute_iso_surface(const PVMVolume& volume, float iso_value,
         glm::vec2 iso_range) const;
 
+    /**
+     * Computes the extrema graph of the two-dimensional slice.
+     *
+     * @param samples slice samples
+     * @param width width of the slice
+     * @param height height of the slice
+     * @return extrema graph of the slice
+     */
+    ExtremaGraph<2> compute_extrema_graph(std::span<const float> samples, uint32_t width,
+        uint32_t height) const;
+
     wgpu::ShaderModule m_slice_shader_module;
     wgpu::BindGroupLayout m_slice_bind_group_layout;
     wgpu::PipelineLayout m_slice_pipeline_layout;
@@ -268,6 +287,11 @@ private:
     wgpu::BindGroupLayout m_iso_contours_bind_group_layout;
     wgpu::PipelineLayout m_iso_contours_pipeline_layout;
     wgpu::RenderPipeline m_iso_contours_render_pipeline;
+
+    wgpu::ShaderModule m_extrema_graph_shader_module;
+    wgpu::BindGroupLayout m_extrema_graph_bind_group_layout;
+    wgpu::PipelineLayout m_extrema_graph_pipeline_layout;
+    wgpu::RenderPipeline m_extrema_graph_render_pipeline;
 
     wgpu::ShaderModule m_iso_surface_shader_module;
     wgpu::BindGroupLayout m_iso_surface_bind_group_layout;
@@ -280,6 +304,10 @@ private:
 
     wgpu::Buffer m_iso_contours_buffer;
     std::vector<IsoContourLine> m_iso_contour_lines;
+
+    wgpu::Buffer m_extrema_graph_buffer;
+    ExtremaGraph<2> m_extrema_graph_2d;
+    uint32_t m_extrema_graph_2d_edges;
 
     wgpu::Buffer m_uniforms_buffer;
     wgpu::Buffer m_iso_surface_vertex_buffer;

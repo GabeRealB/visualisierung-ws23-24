@@ -6,6 +6,9 @@
 #include <iostream>
 #include <map>
 #include <numbers>
+#include <set>
+#include <tuple>
+#include <unordered_set>
 #include <utility>
 
 Application::Application()
@@ -18,6 +21,10 @@ Application::Application()
     , m_iso_contours_bind_group_layout { nullptr }
     , m_iso_contours_pipeline_layout { nullptr }
     , m_iso_contours_render_pipeline { nullptr }
+    , m_extrema_graph_shader_module { nullptr }
+    , m_extrema_graph_bind_group_layout { nullptr }
+    , m_extrema_graph_pipeline_layout { nullptr }
+    , m_extrema_graph_render_pipeline { nullptr }
     , m_iso_surface_shader_module { nullptr }
     , m_iso_surface_bind_group_layout { nullptr }
     , m_iso_surface_pipeline_layout { nullptr }
@@ -27,6 +34,9 @@ Application::Application()
     , m_slice_texture_changed { false }
     , m_iso_contours_buffer { nullptr }
     , m_iso_contour_lines {}
+    , m_extrema_graph_buffer { nullptr }
+    , m_extrema_graph_2d {}
+    , m_extrema_graph_2d_edges { 0 }
     , m_uniforms_buffer { nullptr }
     , m_iso_surface_vertex_buffer { nullptr }
     , m_iso_surface_index_buffer { nullptr }
@@ -49,6 +59,7 @@ Application::Application()
 {
     this->init_slice_render_pipeline();
     this->init_iso_contours_render_pipeline();
+    this->init_extrema_graph_render_pipeline();
     this->init_iso_surface_render_pipeline();
     this->init_slice_texture();
     this->init_iso_contours_buffer();
@@ -69,6 +80,10 @@ Application::Application(Application&& app)
     , m_iso_contours_bind_group_layout { std::exchange(app.m_iso_contours_bind_group_layout, nullptr) }
     , m_iso_contours_pipeline_layout { std::exchange(app.m_iso_contours_pipeline_layout, nullptr) }
     , m_iso_contours_render_pipeline { std::exchange(app.m_iso_contours_render_pipeline, nullptr) }
+    , m_extrema_graph_shader_module { std::exchange(app.m_extrema_graph_shader_module, nullptr) }
+    , m_extrema_graph_bind_group_layout { std::exchange(app.m_extrema_graph_bind_group_layout, nullptr) }
+    , m_extrema_graph_pipeline_layout { std::exchange(app.m_extrema_graph_pipeline_layout, nullptr) }
+    , m_extrema_graph_render_pipeline { std::exchange(app.m_extrema_graph_render_pipeline, nullptr) }
     , m_iso_surface_shader_module { std::exchange(app.m_iso_surface_shader_module, nullptr) }
     , m_iso_surface_bind_group_layout { std::exchange(app.m_iso_surface_bind_group_layout, nullptr) }
     , m_iso_surface_pipeline_layout { std::exchange(app.m_iso_surface_pipeline_layout, nullptr) }
@@ -78,6 +93,9 @@ Application::Application(Application&& app)
     , m_slice_texture_changed { std::exchange(app.m_slice_texture_changed, false) }
     , m_iso_contours_buffer { std::exchange(app.m_iso_contours_buffer, nullptr) }
     , m_iso_contour_lines { std::exchange(app.m_iso_contour_lines, {}) }
+    , m_extrema_graph_buffer { std::exchange(app.m_extrema_graph_buffer, nullptr) }
+    , m_extrema_graph_2d { std::exchange(app.m_extrema_graph_2d, {}) }
+    , m_extrema_graph_2d_edges { std::exchange(app.m_extrema_graph_2d_edges, {}) }
     , m_uniforms_buffer { std::exchange(app.m_uniforms_buffer, nullptr) }
     , m_iso_surface_vertex_buffer { std::exchange(app.m_iso_surface_vertex_buffer, nullptr) }
     , m_iso_surface_index_buffer { std::exchange(app.m_iso_surface_index_buffer, nullptr) }
@@ -102,6 +120,10 @@ Application::Application(Application&& app)
 
 Application::~Application()
 {
+    if (this->m_extrema_graph_buffer) {
+        this->m_extrema_graph_buffer.release();
+    }
+
     if (this->m_iso_surface_index_buffer) {
         this->m_iso_surface_index_buffer.release();
     }
@@ -132,6 +154,19 @@ Application::~Application()
     }
     if (this->m_iso_surface_shader_module) {
         this->m_iso_surface_shader_module.release();
+    }
+
+    if (this->m_extrema_graph_shader_module) {
+        this->m_extrema_graph_shader_module.release();
+    }
+    if (this->m_extrema_graph_bind_group_layout) {
+        this->m_extrema_graph_bind_group_layout.release();
+    }
+    if (this->m_extrema_graph_pipeline_layout) {
+        this->m_extrema_graph_pipeline_layout.release();
+    }
+    if (this->m_extrema_graph_render_pipeline) {
+        this->m_extrema_graph_render_pipeline.release();
     }
 
     if (this->m_iso_contours_render_pipeline) {
@@ -308,6 +343,24 @@ void Application::on_frame(wgpu::CommandEncoder& encoder, wgpu::TextureView& fra
         pass_encoder.draw(6, static_cast<uint32_t>(this->m_iso_contour_lines.size()), 0, 0);
     }
 
+    wgpu::BindGroup extrema_graph_group { nullptr };
+    if (!this->m_extrema_graph_2d.nodes().empty()) {
+        std::array<wgpu::BindGroupEntry, 1> extrema_graph_bind_group_entries { wgpu::Default };
+        extrema_graph_bind_group_entries[0].binding = 0;
+        extrema_graph_bind_group_entries[0].buffer = this->m_extrema_graph_buffer;
+        extrema_graph_bind_group_entries[0].size = WGPU_WHOLE_SIZE;
+
+        wgpu::BindGroupDescriptor extrema_graph_bind_group_desc { wgpu::Default };
+        extrema_graph_bind_group_desc.layout = this->m_extrema_graph_bind_group_layout;
+        extrema_graph_bind_group_desc.entryCount = extrema_graph_bind_group_entries.size();
+        extrema_graph_bind_group_desc.entries = extrema_graph_bind_group_entries.data();
+        extrema_graph_group = this->device().createBindGroup(extrema_graph_bind_group_desc);
+
+        pass_encoder.setPipeline(this->m_extrema_graph_render_pipeline);
+        pass_encoder.setBindGroup(0, extrema_graph_group, 0, nullptr);
+        pass_encoder.draw(6, this->m_extrema_graph_2d_edges, 0, 0);
+    }
+
     wgpu::BindGroup iso_surface_bind_group { nullptr };
     if (this->m_vertex_count > 0) {
         this->init_uniform_buffer();
@@ -340,6 +393,10 @@ void Application::on_frame(wgpu::CommandEncoder& encoder, wgpu::TextureView& fra
 
     if (contours_bind_group) {
         contours_bind_group.release();
+    }
+
+    if (extrema_graph_group) {
+        extrema_graph_group.release();
     }
 
     if (iso_surface_bind_group) {
@@ -621,6 +678,166 @@ void Application::init_iso_contours_render_pipeline()
     pipeline_desc.multisample.mask = 0xFFFFFFFF;
     this->m_iso_contours_render_pipeline = this->device().createRenderPipeline(pipeline_desc);
     if (!this->m_iso_contours_render_pipeline) {
+        std::cerr << "Failed to create the render pipeline" << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+}
+
+void Application::init_extrema_graph_render_pipeline()
+{
+    wgpu::ShaderModuleWGSLDescriptor wgsl_module_desc { wgpu::Default };
+    wgsl_module_desc.code = R"(
+        struct Line {
+            start: vec2<f32>,
+            end: vec2<f32>
+        }
+
+        @group(0)
+        @binding(0)
+        var<storage, read> lines: array<Line>;
+
+        struct VertexOutput {
+            @builtin(position) position: vec4<f32>,
+            @location(0) normal: vec2<f32>,
+        }
+
+        fn get_line_alpha(normal: vec2<f32>) -> f32 {
+            let feather: f32 = 0.5;
+            let one_minus_feather: f32 = 1.0 - feather;
+
+            let distance = length(normal);
+            if distance <= one_minus_feather {
+                return 1.0;
+            } else if distance <= 1.0 {
+                let t = (distance - feather) / one_minus_feather;
+                return mix(1.0, 0.0, t);
+            }
+
+            return 0.0;
+        }
+
+        @vertex
+        fn vs_main(
+            @builtin(vertex_index) in_vertex_index: u32,
+            @builtin(instance_index) in_instance_idx: u32
+        ) -> VertexOutput {
+            let line = lines[in_instance_idx];
+
+            let start_x = mix(-1.0, 1.0, line.start.x);
+            let start_y = mix(-1.0, 1.0, line.start.y);
+            let end_x = mix(-1.0, 1.0, line.end.x);
+            let end_y = mix(-1.0, 1.0, line.end.y);
+
+            let line_start = vec2(start_x, start_y);
+            let line_end = vec2(end_x, end_y);
+
+            let line_vector = normalize(line_end - line_start);
+            let line_unit_cos = line_vector.x;
+            let line_unit_sin = line_vector.y;
+
+            var INDEX_BUFFER = array<u32, 6>(0u, 1u, 2u, 1u, 3u, 2u);
+            var VERTEX_NORMALS_BUFFER = array<vec2<f32>, 4>(
+                vec2<f32>(0.0, -1.0),
+                vec2<f32>(0.0, 1.0),
+                vec2<f32>(0.0, -1.0),
+                vec2<f32>(0.0, 1.0),
+            );
+
+            let rotation_matrix = mat2x2<f32>(
+                line_unit_cos,
+                line_unit_sin,    // column 1: [cos theta, sin theta]
+                -line_unit_sin,
+                line_unit_cos,   // column 2: [-sin theta, cos theta]
+            );
+            let index = INDEX_BUFFER[in_vertex_index];
+            let vertex_normal = rotation_matrix * VERTEX_NORMALS_BUFFER[index];
+            let vertex_pos = select(line_start, line_end, vec2<bool>(index <= 1u));
+
+            let delta = vec4<f32>(vertex_normal * 0.002, 0.0, 0.0);
+            let pos = vec4<f32>(vertex_pos, 0.0, 1.0);
+            let offset_position = (pos + delta);
+
+            return VertexOutput(offset_position, vertex_normal);
+        }
+
+        @fragment
+        fn fs_main(@location(0) normal: vec2<f32>) -> @location(0) vec4<f32> {
+            let alpha = get_line_alpha(normal);
+            let red = vec4(1.0, 0.0, 0.0, 1.0);
+            return red * alpha;
+        }
+    )";
+    wgpu::ShaderModuleDescriptor module_desc { wgpu::Default };
+    module_desc.nextInChain = reinterpret_cast<wgpu::ChainedStruct*>(&wgsl_module_desc);
+    this->m_extrema_graph_shader_module = this->device().createShaderModule(module_desc);
+    if (!this->m_extrema_graph_shader_module) {
+        std::cerr << "Failed to create the shader module" << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+
+    std::array<wgpu::BindGroupLayoutEntry, 1> binding_layout_entries { wgpu::Default };
+    binding_layout_entries[0].binding = 0;
+    binding_layout_entries[0].visibility = wgpu::ShaderStage::Vertex;
+    binding_layout_entries[0].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+
+    wgpu::BindGroupLayoutDescriptor group_layout_desc { wgpu::Default };
+    group_layout_desc.entryCount = binding_layout_entries.size();
+    group_layout_desc.entries = binding_layout_entries.data();
+    this->m_extrema_graph_bind_group_layout = this->device().createBindGroupLayout(group_layout_desc);
+    if (!this->m_extrema_graph_bind_group_layout) {
+        std::cerr << "Failed to create the bind group layout" << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+
+    wgpu::PipelineLayoutDescriptor layout_desc { wgpu::Default };
+    layout_desc.bindGroupLayoutCount = 1;
+    layout_desc.bindGroupLayouts = (WGPUBindGroupLayout*)&this->m_extrema_graph_bind_group_layout;
+    this->m_extrema_graph_pipeline_layout = this->device().createPipelineLayout(layout_desc);
+    if (!this->m_extrema_graph_pipeline_layout) {
+        std::cerr << "Failed to create the pipeline layout" << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+
+    wgpu::RenderPipelineDescriptor pipeline_desc { wgpu::Default };
+    pipeline_desc.layout = this->m_extrema_graph_pipeline_layout;
+    pipeline_desc.vertex.module = this->m_extrema_graph_shader_module;
+    pipeline_desc.vertex.entryPoint = "vs_main";
+
+    wgpu::BlendState fragment_blend_state = { wgpu::Default };
+    fragment_blend_state.alpha.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
+    fragment_blend_state.alpha.operation = wgpu::BlendOperation::Add;
+    fragment_blend_state.alpha.srcFactor = wgpu::BlendFactor::One;
+    fragment_blend_state.color.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
+    fragment_blend_state.color.operation = wgpu::BlendOperation::Add;
+    fragment_blend_state.color.srcFactor = wgpu::BlendFactor::One;
+
+    auto fragment_targets = std::array { wgpu::ColorTargetState { wgpu::Default } };
+    fragment_targets[0].format = this->surface_format();
+    fragment_targets[0].blend = &fragment_blend_state;
+    fragment_targets[0].writeMask = wgpu::ColorWriteMask::All;
+
+    wgpu::FragmentState fragment_state { wgpu::Default };
+    fragment_state.module = this->m_extrema_graph_shader_module;
+    fragment_state.entryPoint = "fs_main";
+    fragment_state.targetCount = fragment_targets.size();
+    fragment_state.targets = fragment_targets.data();
+    fragment_state.constantCount = 0;
+    fragment_state.constants = nullptr;
+    pipeline_desc.fragment = &fragment_state;
+
+    wgpu::DepthStencilState depth_stencil_state { wgpu::Default };
+    depth_stencil_state.format = this->depth_stencil_format();
+    depth_stencil_state.depthWriteEnabled = false;
+    depth_stencil_state.depthCompare = wgpu::CompareFunction::Less;
+    depth_stencil_state.stencilReadMask = 0;
+    depth_stencil_state.stencilWriteMask = 0;
+
+    pipeline_desc.depthStencil = &depth_stencil_state;
+    pipeline_desc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
+    pipeline_desc.multisample.count = 1;
+    pipeline_desc.multisample.mask = 0xFFFFFFFF;
+    this->m_extrema_graph_render_pipeline = this->device().createRenderPipeline(pipeline_desc);
+    if (!this->m_extrema_graph_render_pipeline) {
         std::cerr << "Failed to create the render pipeline" << std::endl;
         std::exit(EXIT_FAILURE);
     }
@@ -920,6 +1137,59 @@ void Application::init_iso_surface_buffer()
     }
 }
 
+void Application::init_extrema_graph_2d()
+{
+    uint32_t width { this->surface_width() / 2 };
+    uint32_t height { this->surface_height() };
+    this->m_extrema_graph_2d = this->compute_extrema_graph(this->m_slice_samples, width, height);
+
+    // Compute the lines of the extrema graph.
+    struct alignas(8) Line {
+        glm::vec2 start;
+        glm::vec2 end;
+    };
+    glm::vec2 scaling {
+        1.0f / static_cast<float>(width - 1),
+        1.0f / static_cast<float>(height - 1),
+    };
+    std::vector<Line> lines {};
+    const auto& nodes = this->m_extrema_graph_2d.nodes();
+    for (const auto& node : nodes) {
+        for (auto neighbor_idx : node.neighbor_idxs) {
+            const auto& neighbor { nodes[neighbor_idx] };
+            auto start = glm::vec2(node.extremum.pos) * scaling;
+            auto end = glm::vec2(neighbor.extremum.pos) * scaling;
+            lines.push_back(Line { .start = start, .end = end });
+        }
+    }
+
+    if (this->m_extrema_graph_buffer) {
+        this->m_extrema_graph_buffer.release();
+        this->m_extrema_graph_buffer = { nullptr };
+    }
+
+    // Update the buffer.
+    wgpu::Device& device = this->device();
+    wgpu::Queue queue { device.getQueue() };
+
+    size_t buffer_size { lines.size() * sizeof(Line) };
+    if (buffer_size == 0) {
+        buffer_size = sizeof(Line);
+    }
+    wgpu::BufferDescriptor desc { wgpu::Default };
+    desc.label = "extremagraph buffer";
+    desc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Storage;
+    desc.mappedAtCreation = false;
+    desc.size = static_cast<uint64_t>(buffer_size);
+    this->m_extrema_graph_buffer = device.createBuffer(desc);
+    this->m_extrema_graph_2d_edges = lines.size();
+    if (!this->m_extrema_graph_buffer) {
+        std::cerr << "Could not create extremagraph buffer!" << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+    queue.writeBuffer(this->m_extrema_graph_buffer, 0, lines.data(), lines.size() * sizeof(Line));
+}
+
 void Application::init_projection_matrix()
 {
     constexpr float fov { 70.0f * std::numbers::pi_v<float> / 180.0 };
@@ -1040,6 +1310,9 @@ void Application::update_slice_samples_and_texture()
 
     // Sample the slice.
     this->sample_slice(*this->m_volume, this->m_slice_samples, plane, width, height);
+
+    // Initialize Extrema Graph
+    this->init_extrema_graph_2d();
 
     // Allocate memory for the color buffer.
     std::vector<Color> color_buffer { size, Color {} };
@@ -1268,7 +1541,8 @@ void Application::color_slice(std::span<const float> samples, std::span<Color> c
 }
 
 void Application::compute_marching_squares_cell(std::vector<IsoContourLine>& lines, Cell2D cell, float iso_value,
-    glm::vec2 cell_start, glm::vec2 cell_size) const
+    glm::vec2 cell_start, glm::vec2 cell_size, glm::vec<2, std::uint32_t> cell_idx,
+    std::vector<std::tuple<uint32_t, uint32_t>>& cell_stack) const
 {
     int case_num { 0 };
     case_num |= 0b0001 * (cell.bottom_left > iso_value);
@@ -1285,6 +1559,13 @@ void Application::compute_marching_squares_cell(std::vector<IsoContourLine>& lin
         cell_start + glm::vec2 { cell_size.x, 0.0 },
         cell_start + glm::vec2 { cell_size.x, cell_size.y },
         cell_start + glm::vec2 { 0.0, cell_size.y },
+    };
+
+    constexpr std::array<std::array<int, 2>, 4> ms_cell_offset {
+        std::array<int, 2> { 0, -1 },
+        std::array<int, 2> { 1, 0 },
+        std::array<int, 2> { 0, 1 },
+        std::array<int, 2> { -1, 0 },
     };
 
     constexpr std::array<std::array<int, 2>, 4> ms_edges {
@@ -1343,6 +1624,14 @@ void Application::compute_marching_squares_cell(std::vector<IsoContourLine>& lin
         glm::vec2 line_end { end_position_0 + ((1.0f - end_t) * (end_position_1 - end_position_0)) };
 
         lines.push_back(IsoContourLine { line_start, line_end });
+
+        auto cell_offset_start = ms_cell_offset[start_edge];
+        auto cell_offset_end = ms_cell_offset[end_edge];
+
+        auto next_cell_idx_start = glm::ivec2(cell_idx) + glm::ivec2 { cell_offset_start[0], cell_offset_start[1] };
+        auto next_cell_idx_end = glm::ivec2(cell_idx) + glm::ivec2 { cell_offset_end[0], cell_offset_end[1] };
+        cell_stack.emplace_back(next_cell_idx_start.x, next_cell_idx_start.y);
+        cell_stack.emplace_back(next_cell_idx_end.x, next_cell_idx_end.y);
     }
 }
 
@@ -1356,30 +1645,69 @@ std::vector<IsoContourLine> Application::compute_iso_contours(std::span<const fl
         1.0 / static_cast<float>(height - 1),
     };
 
-    for (uint32_t y { 0 }; y < height - 1; y++) {
-        for (uint32_t x { 0 }; x < width - 1; x++) {
-            std::size_t bottom_left_idx { x + (y * width) };
-            std::size_t bottom_right_idx { (x + 1) + (y * width) };
-            std::size_t top_left_idx { x + ((y + 1) * width) };
-            std::size_t top_right_idx { (x + 1) + ((y + 1) * width) };
+    auto iso_value_in_cell = [&](glm::vec<2, size_t> p, float iso_value) {
+        uint32_t x = (p.x < width - 1) ? p.x : (p.x - 1);
+        uint32_t y = (p.y < height - 1) ? p.y : (p.y - 1);
 
-            float bottom_left = samples[bottom_left_idx];
-            float bottom_right = samples[bottom_right_idx];
-            float top_left = samples[top_left_idx];
-            float top_right = samples[top_right_idx];
-            Cell2D cell {
-                .top_left = top_left,
-                .top_right = top_right,
-                .bottom_left = bottom_left,
-                .bottom_right = bottom_right
-            };
+        std::size_t bottom_left_idx { x + (y * width) };
+        std::size_t bottom_right_idx { (x + 1) + (y * width) };
+        std::size_t top_left_idx { x + ((y + 1) * width) };
+        std::size_t top_right_idx { (x + 1) + ((y + 1) * width) };
 
-            glm::vec2 cell_start {
-                static_cast<float>(x) / static_cast<float>(width),
-                static_cast<float>(y) / static_cast<float>(height),
-            };
-            this->compute_marching_squares_cell(lines, cell, normalized_iso_value, cell_start, cell_size);
+        float bottom_left = samples[bottom_left_idx];
+        float bottom_right = samples[bottom_right_idx];
+        float top_left = samples[top_left_idx];
+        float top_right = samples[top_right_idx];
+
+        float min = std::min({ bottom_left, bottom_right, top_left, top_right });
+        float max = std::max({ bottom_left, bottom_right, top_left, top_right });
+
+        return min != max && min <= iso_value && iso_value <= max;
+    };
+    auto start_grid_points = this->m_extrema_graph_2d.query_starting_points(normalized_iso_value, iso_value_in_cell);
+    std::vector<std::tuple<uint32_t, uint32_t>> cell_stack {};
+    for (auto grid_point : start_grid_points) {
+        uint32_t x = (grid_point.x < width - 1) ? grid_point.x : (grid_point.x - 1);
+        uint32_t y = (grid_point.y < height - 1) ? grid_point.y : (grid_point.y - 1);
+        cell_stack.emplace_back(x, y);
+    }
+
+    std::set<std::tuple<uint32_t, uint32_t>> visited_cells {};
+    while (!cell_stack.empty()) {
+        auto [x, y] = cell_stack.back();
+        cell_stack.pop_back();
+
+        if (x >= width - 1 || y >= height - 1) {
+            continue;
         }
+
+        auto inserted = visited_cells.insert({ x, y });
+        if (!inserted.second) {
+            continue;
+        }
+
+        std::size_t bottom_left_idx { x + (y * width) };
+        std::size_t bottom_right_idx { (x + 1) + (y * width) };
+        std::size_t top_left_idx { x + ((y + 1) * width) };
+        std::size_t top_right_idx { (x + 1) + ((y + 1) * width) };
+
+        float bottom_left = samples[bottom_left_idx];
+        float bottom_right = samples[bottom_right_idx];
+        float top_left = samples[top_left_idx];
+        float top_right = samples[top_right_idx];
+        Cell2D cell {
+            .top_left = top_left,
+            .top_right = top_right,
+            .bottom_left = bottom_left,
+            .bottom_right = bottom_right
+        };
+
+        glm::vec2 cell_start {
+            static_cast<float>(x) / static_cast<float>(width),
+            static_cast<float>(y) / static_cast<float>(height),
+        };
+        this->compute_marching_squares_cell(lines, cell, normalized_iso_value, cell_start,
+            cell_size, { x, y }, cell_stack);
     }
 
     return lines;
@@ -1764,4 +2092,10 @@ std::vector<IsoSurfaceTriangle> Application::compute_iso_surface(const PVMVolume
     }
 
     return triangles;
+}
+
+ExtremaGraph<2> Application::compute_extrema_graph(std::span<const float> samples, uint32_t width,
+    uint32_t height) const
+{
+    return ExtremaGraph<2> {};
 }
