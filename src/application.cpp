@@ -658,12 +658,12 @@ void Application::init_iso_surface_render_pipeline()
 
             out.pos = state.mvp_matrix * vec4(in.position, 1.0);
             out.position = (state.model_matrix * vec4(in.position, 1.0)).xyz;
-            out.normal = state.normal_matrix * in.normal;
+            out.normal = in.normal;
 
             return out;
         }
 
-        const LIGHT_POS = vec3<f32>(100.0, 100.0, 100.0);
+        const LIGHT_POS = vec3<f32>(100.0, -100.0, 100.0);
         const AMBIENT_COLOR = vec3<f32>(0.1, 0.1, 0.1);
         const LIGHT_COLOR = vec3<f32>(0.7, 0.7, 0.7);
         const SHININESS = 16.0;
@@ -778,7 +778,7 @@ void Application::init_iso_surface_render_pipeline()
     pipeline_desc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
     pipeline_desc.primitive.stripIndexFormat = wgpu::IndexFormat::Undefined;
     pipeline_desc.primitive.frontFace = wgpu::FrontFace::CCW;
-    pipeline_desc.primitive.cullMode = wgpu::CullMode::None;
+    pipeline_desc.primitive.cullMode = wgpu::CullMode::Front;
     pipeline_desc.multisample.count = 1;
     pipeline_desc.multisample.mask = 0xFFFFFFFF;
     this->m_iso_surface_render_pipeline = this->device().createRenderPipeline(pipeline_desc);
@@ -1119,8 +1119,8 @@ void Application::update_iso_surface()
     auto set_normal = [&](std::size_t index, glm::vec3 value) {
         auto& normal { vertex_buffer[index * 2 + 1] };
         normal[0] = value.x;
-        normal[1] = value.x;
-        normal[2] = value.x;
+        normal[1] = value.y;
+        normal[2] = value.z;
     };
 
     // Compute the smooth normals for each vertex.
@@ -1718,7 +1718,7 @@ void Application::compute_marching_cubes_cell(std::vector<IsoSurfaceTriangle>& t
             float scalar_start { values[start_vertex] };
             float scalar_end { values[end_vertex] };
 
-            float t { (scalar_start - iso_value) / (scalar_end - scalar_start) };
+            float t { (scalar_end - iso_value) / (scalar_end - scalar_start) };
             glm::vec3 position { position_start + ((1.0f - t) * (position_end - position_start)) };
 
             triangle[j] = position;
