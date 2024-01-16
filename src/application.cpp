@@ -6,6 +6,7 @@
 #include <iostream>
 #include <map>
 #include <numbers>
+#include <optional>
 #include <set>
 #include <tuple>
 #include <unordered_set>
@@ -2448,4 +2449,95 @@ void Application::compute_ray_casting(const PVMVolume& volume, std::span<Color> 
     glm::vec3 plane_up, uint32_t width, uint32_t height, float step_size,
     float view_plane_distance, float field_of_view) const
 {
+    const float half_fov = glm::radians(field_of_view * 0.5f);
+    const float width_f = static_cast<float>(width);
+    const float height_f = static_cast<float>(height);
+    const float aspect = static_cast<float>(width) / static_cast<float>(height);
+    const float view_height = 2 * glm::tan(half_fov) * view_plane_distance;
+    const float view_width = view_height * aspect;
+
+    const float view_height_half = view_height / 2.0f;
+    const float view_width_half = view_width / 2.0f;
+
+    const glm::vec3 plane_center = camera_position + (view_plane_distance * camera_direction);
+    const glm::vec3 plane_start = plane_center - (view_width_half * plane_right) - (view_height_half * plane_up);
+    const glm::vec3 pixel_offset_x = ((view_width / width_f) * plane_right);
+    const glm::vec3 pixel_offset_y = ((view_height / height_f) * plane_up);
+    const glm::vec3 pixel_mid_offset = (pixel_offset_x + pixel_offset_y) / 2.0f;
+
+    auto volume_extents = volume.extents();
+    auto volume_scale_inv = 1.0f / (volume.scale());
+    auto volume_bb_start = volume.voxel_position_start(0, 0, 0);
+    auto volume_bb_end = volume.voxel_position_end(volume_extents.x - 2, volume_extents.y - 2, volume_extents.z - 2);
+
+    auto volume_intersection = [&](glm::vec3 ray_start, glm::vec3 ray_dir) {
+        const glm::vec3 dir_inv = glm::vec3 { 1.0f } / ray_dir;
+
+        const glm::vec3 t135 = (volume_bb_start - ray_start) * dir_inv;
+        const glm::vec3 t246 = (volume_bb_end - ray_start) * dir_inv;
+
+        const glm::vec3 t_mins = glm::min(t135, t246);
+        const glm::vec3 t_maxs = glm::max(t135, t246);
+
+        float t_min = std::max({ t_mins.x, t_mins.y, t_mins.z });
+        float t_max = std::min({ t_maxs.x, t_maxs.y, t_maxs.z });
+
+        if (t_max < 0.0 || t_min > t_max) {
+            return std::optional<std::tuple<float, float>> {};
+        }
+
+        return std::optional<std::tuple<float, float>> { std::in_place, t_min, t_max };
+    };
+
+    for (uint32_t y = 0; y < height; y++) {
+        for (uint32_t x = 0; x < width; x++) {
+            const size_t index = x + (y * width);
+
+            const glm::vec3 offset_x = static_cast<float>(x) * pixel_offset_x;
+            const glm::vec3 offset_y = static_cast<float>(y) * pixel_offset_y;
+
+            const glm::vec3 ray_start = plane_start + offset_x + offset_y + pixel_mid_offset;
+            const glm::vec3 ray_dir = glm::normalize(ray_start - camera_position);
+            const glm::vec3 ray_step = step_size * ray_dir;
+
+            auto intersection = volume_intersection(ray_start, ray_dir);
+            if (!intersection.has_value()) {
+                view_buffer[index] = Color { 115, 140, 153, 255 };
+                continue;
+            }
+
+            auto [t_min, t_max] = *intersection;
+            const glm::vec3 entry_pos = ray_start + (t_min * ray_dir);
+            const glm::vec3 exit_pos = ray_start + (t_max * ray_dir);
+            const size_t num_steps = static_cast<size_t>(glm::floor(glm::length(exit_pos - entry_pos) / step_size));
+
+            glm::vec4 color { 0.0f };
+            glm::vec3 sample_pos = entry_pos;
+            for (size_t i = 0; i <= num_steps && color.a < 1.0f; i++) {
+                const auto voxel_pos = sample_pos * volume_scale_inv;
+                const float sample = std::clamp(this->sample_at_position(volume, voxel_pos), 0.0f, 1.0f);
+                const Color sample_color_u = this->sample_transfer_function(sample);
+                glm::vec4 sample_color {
+                    sample_color_u.r / 255.0f,
+                    sample_color_u.g / 255.0f,
+                    sample_color_u.b / 255.0f,
+                    sample * 0.05,
+                };
+                sample_color *= glm::vec4(sample_color.a, sample_color.a, sample_color.a, 1.0f);
+
+                color += (1.0f - color.a) * sample_color;
+                sample_pos += ray_step;
+            }
+            color += (1.0f - color.a) * glm::vec4 { 0.45f, 0.55f, 0.60f, 1.0f };
+            color *= glm::vec4(color.a, color.a, color.a, 1.0f);
+
+            Color buffer_color {
+                static_cast<uint8_t>(color.r * 255.0f),
+                static_cast<uint8_t>(color.g * 255.0f),
+                static_cast<uint8_t>(color.b * 255.0f),
+                static_cast<uint8_t>(color.a * 255.0f),
+            };
+            view_buffer[index] = buffer_color;
+        }
+    }
 }
