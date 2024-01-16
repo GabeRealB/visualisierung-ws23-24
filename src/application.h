@@ -125,11 +125,13 @@ private:
     void init_iso_contours_render_pipeline();
     void init_extrema_graph_render_pipeline();
     void init_iso_surface_render_pipeline();
+    void init_ray_casting_render_pipeline();
 
     void init_slice_texture();
     void init_iso_contours_buffer();
     void init_uniform_buffer();
     void init_iso_surface_buffer();
+    void init_ray_casting_texture();
 
     void init_extrema_graph_2d();
 
@@ -140,6 +142,7 @@ private:
     void update_slice_samples_and_texture();
     void update_iso_contours();
     void update_iso_surface();
+    void update_volume_rendering();
 
     /**
      * Computes the value inside the cell by applying a trilinear interpolation
@@ -278,6 +281,35 @@ private:
     ExtremaGraph<2> compute_extrema_graph(std::span<const float> samples, uint32_t width,
         uint32_t height) const;
 
+    /**
+     * Computes the volume rendering of the inputted volume.
+     *
+     * This function computes the volume rendering, by applying a ray casting
+     * on the inputted volume, and writes it back into the `view_buffer` of width
+     * `width` and height `height`. The view position and direction are specified
+     * by the `camera_position` and the `camera_direction` variables. The position
+     * and orientation of the view plane is specified by the `plane_right`,
+     * `plane_up` and `view_plane_distance` parameters. The direction vectors
+     * are normalized. The `field_of_view` specifies the angle, in degrees, between
+     * the view position and the top/bottom of the view plane.
+     *
+     * @param volume volume to render
+     * @param view_buffer result buffer
+     * @param camera_position view position
+     * @param camera_direction view direction
+     * @param plane_right right vector of the view plane
+     * @param plane_up up vector of the view plane
+     * @param width width in pixels
+     * @param height height in pixels
+     * @param step_size length of one sampling step
+     * @param view_plane_distance distance of the center of the view plane from the view position
+     * @param field_of_view angle at the view position of the triangle (view pos, plane top, plane bottom)
+     */
+    void compute_ray_casting(const PVMVolume& volume, std::span<Color> view_buffer,
+        glm::vec3 camera_position, glm::vec3 camera_direction, glm::vec3 plane_right,
+        glm::vec3 plane_up, uint32_t width, uint32_t height, float step_size,
+        float view_plane_distance, float field_of_view) const;
+
     wgpu::ShaderModule m_slice_shader_module;
     wgpu::BindGroupLayout m_slice_bind_group_layout;
     wgpu::PipelineLayout m_slice_pipeline_layout;
@@ -298,6 +330,11 @@ private:
     wgpu::PipelineLayout m_iso_surface_pipeline_layout;
     wgpu::RenderPipeline m_iso_surface_render_pipeline;
 
+    wgpu::ShaderModule m_ray_casting_shader_module;
+    wgpu::BindGroupLayout m_ray_casting_bind_group_layout;
+    wgpu::PipelineLayout m_ray_casting_pipeline_layout;
+    wgpu::RenderPipeline m_ray_casting_render_pipeline;
+
     wgpu::Texture m_slice_texture;
     std::vector<float> m_slice_samples;
     bool m_slice_texture_changed;
@@ -308,6 +345,9 @@ private:
     wgpu::Buffer m_extrema_graph_buffer;
     ExtremaGraph<2> m_extrema_graph_2d;
     uint32_t m_extrema_graph_2d_edges;
+
+    wgpu::Texture m_ray_casting_texture;
+    bool m_ray_casting_texture_changed;
 
     wgpu::Buffer m_uniforms_buffer;
     wgpu::Buffer m_iso_surface_vertex_buffer;
@@ -331,4 +371,6 @@ private:
     float m_camera_distance;
     float m_camera_theta;
     float m_camera_phi;
+    float m_ray_casting_step_size;
+    bool m_render_iso_surface;
 };

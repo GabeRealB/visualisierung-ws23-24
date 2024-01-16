@@ -29,6 +29,10 @@ Application::Application()
     , m_iso_surface_bind_group_layout { nullptr }
     , m_iso_surface_pipeline_layout { nullptr }
     , m_iso_surface_render_pipeline { nullptr }
+    , m_ray_casting_shader_module { nullptr }
+    , m_ray_casting_bind_group_layout { nullptr }
+    , m_ray_casting_pipeline_layout { nullptr }
+    , m_ray_casting_render_pipeline { nullptr }
     , m_slice_texture { nullptr }
     , m_slice_samples {}
     , m_slice_texture_changed { false }
@@ -37,6 +41,8 @@ Application::Application()
     , m_extrema_graph_buffer { nullptr }
     , m_extrema_graph_2d {}
     , m_extrema_graph_2d_edges { 0 }
+    , m_ray_casting_texture { nullptr }
+    , m_ray_casting_texture_changed { false }
     , m_uniforms_buffer { nullptr }
     , m_iso_surface_vertex_buffer { nullptr }
     , m_iso_surface_index_buffer { nullptr }
@@ -56,15 +62,19 @@ Application::Application()
     , m_camera_distance { 2.0f }
     , m_camera_theta { std::numbers::pi_v<float> / 2.0f }
     , m_camera_phi { 0.0f }
+    , m_ray_casting_step_size { 0.1f }
+    , m_render_iso_surface { false }
 {
     this->init_slice_render_pipeline();
     this->init_iso_contours_render_pipeline();
     this->init_extrema_graph_render_pipeline();
     this->init_iso_surface_render_pipeline();
+    this->init_ray_casting_render_pipeline();
     this->init_slice_texture();
     this->init_iso_contours_buffer();
     this->init_uniform_buffer();
     this->init_iso_surface_buffer();
+    this->init_ray_casting_texture();
     this->init_projection_matrix();
     this->init_view_matrix();
     this->init_model_matrix();
@@ -88,6 +98,10 @@ Application::Application(Application&& app)
     , m_iso_surface_bind_group_layout { std::exchange(app.m_iso_surface_bind_group_layout, nullptr) }
     , m_iso_surface_pipeline_layout { std::exchange(app.m_iso_surface_pipeline_layout, nullptr) }
     , m_iso_surface_render_pipeline { std::exchange(app.m_iso_surface_render_pipeline, nullptr) }
+    , m_ray_casting_shader_module { std::exchange(app.m_ray_casting_shader_module, nullptr) }
+    , m_ray_casting_bind_group_layout { std::exchange(app.m_ray_casting_bind_group_layout, nullptr) }
+    , m_ray_casting_pipeline_layout { std::exchange(app.m_ray_casting_pipeline_layout, nullptr) }
+    , m_ray_casting_render_pipeline { std::exchange(app.m_ray_casting_render_pipeline, nullptr) }
     , m_slice_texture { std::exchange(app.m_slice_texture, nullptr) }
     , m_slice_samples { std::exchange(app.m_slice_samples, {}) }
     , m_slice_texture_changed { std::exchange(app.m_slice_texture_changed, false) }
@@ -96,6 +110,8 @@ Application::Application(Application&& app)
     , m_extrema_graph_buffer { std::exchange(app.m_extrema_graph_buffer, nullptr) }
     , m_extrema_graph_2d { std::exchange(app.m_extrema_graph_2d, {}) }
     , m_extrema_graph_2d_edges { std::exchange(app.m_extrema_graph_2d_edges, {}) }
+    , m_ray_casting_texture { std::exchange(app.m_ray_casting_texture, nullptr) }
+    , m_ray_casting_texture_changed { std::exchange(app.m_ray_casting_texture_changed, false) }
     , m_uniforms_buffer { std::exchange(app.m_uniforms_buffer, nullptr) }
     , m_iso_surface_vertex_buffer { std::exchange(app.m_iso_surface_vertex_buffer, nullptr) }
     , m_iso_surface_index_buffer { std::exchange(app.m_iso_surface_index_buffer, nullptr) }
@@ -115,6 +131,8 @@ Application::Application(Application&& app)
     , m_camera_distance { std::exchange(app.m_camera_distance, 2.0f) }
     , m_camera_theta { std::exchange(app.m_camera_theta, std::numbers::pi_v<float> / 2.0f) }
     , m_camera_phi { std::exchange(app.m_camera_phi, 0.0f) }
+    , m_ray_casting_step_size { std::exchange(app.m_ray_casting_step_size, 0.1f) }
+    , m_render_iso_surface { std::exchange(app.m_render_iso_surface, false) }
 {
 }
 
@@ -136,11 +154,28 @@ Application::~Application()
         this->m_uniforms_buffer.release();
     }
 
+    if (this->m_ray_casting_texture) {
+        this->m_ray_casting_texture.release();
+    }
+
     if (this->m_iso_contours_buffer) {
         this->m_iso_contours_buffer.release();
     }
     if (this->m_slice_texture) {
         this->m_slice_texture.release();
+    }
+
+    if (this->m_ray_casting_render_pipeline) {
+        this->m_ray_casting_render_pipeline.release();
+    }
+    if (this->m_ray_casting_pipeline_layout) {
+        this->m_ray_casting_pipeline_layout.release();
+    }
+    if (this->m_ray_casting_bind_group_layout) {
+        this->m_ray_casting_bind_group_layout.release();
+    }
+    if (this->m_ray_casting_shader_module) {
+        this->m_ray_casting_shader_module.release();
     }
 
     if (this->m_iso_surface_render_pipeline) {
@@ -262,6 +297,15 @@ void Application::on_frame(wgpu::CommandEncoder& encoder, wgpu::TextureView& fra
         this->init_view_matrix();
     }
 
+    bool step_size_changed = ImGui::SliderFloat("Ray-Casting step size", &this->m_ray_casting_step_size, 0.1f, 10.0f);
+
+    bool draw_mode_changed = ImGui::Checkbox("Draw Isosurface", &this->m_render_iso_surface);
+    if (draw_mode_changed
+        || (!this->m_render_iso_surface && (camera_changed || dataset_changed || step_size_changed || this->m_ray_casting_texture_changed))) {
+        this->m_ray_casting_texture_changed = false;
+        this->update_volume_rendering();
+    }
+
     ImGui::End();
 
     bool update_slice_texture = this->m_slice_texture_changed || dataset_changed || plane_changed;
@@ -362,7 +406,7 @@ void Application::on_frame(wgpu::CommandEncoder& encoder, wgpu::TextureView& fra
     }
 
     wgpu::BindGroup iso_surface_bind_group { nullptr };
-    if (this->m_vertex_count > 0) {
+    if (this->m_vertex_count > 0 && this->m_render_iso_surface) {
         this->init_uniform_buffer();
 
         std::array<wgpu::BindGroupEntry, 1> surface_bind_group_entries { wgpu::Default };
@@ -387,9 +431,35 @@ void Application::on_frame(wgpu::CommandEncoder& encoder, wgpu::TextureView& fra
         pass_encoder.drawIndexed(this->m_index_count, 1, 0, 0, 0);
     }
 
+    wgpu::TextureView ray_casting_texture_view = this->m_ray_casting_texture.createView();
+    wgpu::BindGroup ray_casting_bind_group { nullptr };
+    if (!this->m_render_iso_surface) {
+        std::array<wgpu::BindGroupEntry, 1> ray_casting_bind_group_entries { wgpu::Default };
+        ray_casting_bind_group_entries[0].binding = 0;
+        ray_casting_bind_group_entries[0].textureView = ray_casting_texture_view;
+
+        wgpu::BindGroupDescriptor ray_casting_bind_group_desc { wgpu::Default };
+        ray_casting_bind_group_desc.layout = this->m_ray_casting_bind_group_layout;
+        ray_casting_bind_group_desc.entryCount = ray_casting_bind_group_entries.size();
+        ray_casting_bind_group_desc.entries = ray_casting_bind_group_entries.data();
+        ray_casting_bind_group = this->device().createBindGroup(ray_casting_bind_group_desc);
+
+        pass_encoder.setViewport(width, 0.0f, width, height, 0.0f, 1.0f);
+        pass_encoder.setPipeline(this->m_ray_casting_render_pipeline);
+        pass_encoder.setBindGroup(0, ray_casting_bind_group, 0, nullptr);
+        pass_encoder.draw(6, 1, 0, 0);
+    }
+
     pass_encoder.end();
     pass_encoder.release();
     bind_group.release();
+
+    ray_casting_texture_view.release();
+    slice_texture_view.release();
+
+    if (ray_casting_bind_group) {
+        ray_casting_bind_group.release();
+    }
 
     if (contours_bind_group) {
         contours_bind_group.release();
@@ -408,6 +478,7 @@ void Application::on_resize()
 {
     ApplicationBase::on_resize();
     this->init_slice_texture();
+    this->init_ray_casting_texture();
     this->init_projection_matrix();
 }
 
@@ -1005,6 +1076,118 @@ void Application::init_iso_surface_render_pipeline()
     }
 }
 
+void Application::init_ray_casting_render_pipeline()
+{
+    wgpu::ShaderModuleWGSLDescriptor wgsl_module_desc { wgpu::Default };
+    wgsl_module_desc.code = R"(
+        @group(0)
+        @binding(0)
+        var view_texture: texture_2d<f32>;
+
+        struct VertexOutput {
+            @builtin(position) position: vec4<f32>,
+            @location(0) uv: vec2<f32>
+        }
+
+        @vertex
+        fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
+            var VERTEX_BUFFER = array<vec2<f32>, 6>(
+                vec2<f32>(-1.0, -1.0),
+                vec2<f32>(1.0, -1.0),
+                vec2<f32>(-1.0, 1.0),
+                vec2<f32>(1.0, -1.0),
+                vec2<f32>(1.0, 1.0),
+                vec2<f32>(-1.0, 1.0),
+            );
+            var UV_BUFFER = array<vec2<f32>, 6>(
+                vec2<f32>(0.0, 0.0),
+                vec2<f32>(1.0, 0.0),
+                vec2<f32>(0.0, 1.0),
+                vec2<f32>(1.0, 0.0),
+                vec2<f32>(1.0, 1.0),
+                vec2<f32>(0.0, 1.0),
+            );
+
+            let pos = vec4(VERTEX_BUFFER[in_vertex_index], 0.0, 1.0);
+            let uv = UV_BUFFER[in_vertex_index];
+            return VertexOutput(pos, uv);
+        }
+
+        @fragment
+        fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
+            let dimensions = vec2<f32>(textureDimensions(view_texture));
+            let texel = vec2<u32>(dimensions * uv);
+            return textureLoad(view_texture, texel, 0);
+        }
+    )";
+    wgpu::ShaderModuleDescriptor module_desc { wgpu::Default };
+    module_desc.nextInChain = reinterpret_cast<wgpu::ChainedStruct*>(&wgsl_module_desc);
+    this->m_ray_casting_shader_module = this->device().createShaderModule(module_desc);
+    if (!this->m_ray_casting_shader_module) {
+        std::cerr << "Failed to create the shader module" << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+
+    std::array<wgpu::BindGroupLayoutEntry, 1> binding_layout_entries { wgpu::Default };
+    binding_layout_entries[0].binding = 0;
+    binding_layout_entries[0].visibility = wgpu::ShaderStage::Fragment;
+    binding_layout_entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+    binding_layout_entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
+
+    wgpu::BindGroupLayoutDescriptor group_layout_desc { wgpu::Default };
+    group_layout_desc.entryCount = binding_layout_entries.size();
+    group_layout_desc.entries = binding_layout_entries.data();
+    this->m_ray_casting_bind_group_layout = this->device().createBindGroupLayout(group_layout_desc);
+    if (!this->m_ray_casting_bind_group_layout) {
+        std::cerr << "Failed to create the bind group layout" << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+
+    wgpu::PipelineLayoutDescriptor layout_desc { wgpu::Default };
+    layout_desc.bindGroupLayoutCount = 1;
+    layout_desc.bindGroupLayouts = (WGPUBindGroupLayout*)&this->m_ray_casting_bind_group_layout;
+    this->m_ray_casting_pipeline_layout = this->device().createPipelineLayout(layout_desc);
+    if (!this->m_ray_casting_pipeline_layout) {
+        std::cerr << "Failed to create the pipeline layout" << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+
+    wgpu::RenderPipelineDescriptor pipeline_desc { wgpu::Default };
+    pipeline_desc.layout = this->m_ray_casting_pipeline_layout;
+    pipeline_desc.vertex.module = this->m_slice_shader_module;
+    pipeline_desc.vertex.entryPoint = "vs_main";
+
+    auto fragment_targets = std::array { wgpu::ColorTargetState { wgpu::Default } };
+    fragment_targets[0].format = this->surface_format();
+    fragment_targets[0].writeMask = wgpu::ColorWriteMask::All;
+
+    wgpu::FragmentState fragment_state { wgpu::Default };
+    fragment_state.module = this->m_slice_shader_module;
+    fragment_state.entryPoint = "fs_main";
+    fragment_state.targetCount = fragment_targets.size();
+    fragment_state.targets = fragment_targets.data();
+    fragment_state.constantCount = 0;
+    fragment_state.constants = nullptr;
+    pipeline_desc.fragment = &fragment_state;
+
+    wgpu::DepthStencilState depth_stencil_state { wgpu::Default };
+    depth_stencil_state.format = this->depth_stencil_format();
+    depth_stencil_state.depthWriteEnabled = false;
+    depth_stencil_state.depthCompare = wgpu::CompareFunction::Less;
+    depth_stencil_state.stencilReadMask = 0;
+    depth_stencil_state.stencilWriteMask = 0;
+
+    pipeline_desc.depthStencil = &depth_stencil_state;
+    pipeline_desc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
+    pipeline_desc.multisample.count = 1;
+    pipeline_desc.multisample.mask = 0xFFFFFFFF;
+    this->m_ray_casting_render_pipeline = this->device().createRenderPipeline(pipeline_desc);
+    if (!this->m_ray_casting_render_pipeline) {
+        std::cerr << "Failed to create the render pipeline" << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+}
+
 void Application::init_slice_texture()
 {
     if (this->m_slice_texture) {
@@ -1092,6 +1275,35 @@ void Application::init_uniform_buffer()
         this->m_view_pos,
     };
     queue.writeBuffer(this->m_uniforms_buffer, 0, &state, sizeof(UniformState));
+}
+
+void Application::init_ray_casting_texture()
+{
+    if (this->m_ray_casting_texture) {
+        this->m_ray_casting_texture.release();
+        this->m_ray_casting_texture = { nullptr };
+    }
+
+    wgpu::Device& device = this->device();
+    uint32_t width { this->surface_width() / 2 };
+    uint32_t height { this->surface_height() };
+
+    wgpu::TextureDescriptor desc { wgpu::Default };
+    desc.label = "ray casting texture";
+    desc.usage = wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::CopySrc | wgpu::TextureUsage::TextureBinding;
+    desc.dimension = wgpu::TextureDimension::_2D;
+    desc.size = wgpu::Extent3D { width, height, 1 };
+    desc.format = wgpu::TextureFormat::RGBA8Unorm;
+    desc.mipLevelCount = 1;
+    desc.sampleCount = 1;
+    desc.viewFormatCount = 0;
+    desc.viewFormats = nullptr;
+    this->m_ray_casting_texture = device.createTexture(desc);
+    this->m_ray_casting_texture_changed = true;
+    if (!this->m_ray_casting_texture) {
+        std::cerr << "Could not create ray casting texture!" << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
 }
 
 void Application::init_iso_surface_buffer()
@@ -1431,6 +1643,47 @@ void Application::update_iso_surface()
     wgpu::Queue queue { device.getQueue() };
     queue.writeBuffer(this->m_iso_surface_vertex_buffer, 0, vertex_buffer.data(), vertex_buffer.size() * sizeof(float) * 3);
     queue.writeBuffer(this->m_iso_surface_index_buffer, 0, index_buffer.data(), index_buffer.size() * sizeof(std::uint32_t));
+}
+
+void Application::update_volume_rendering()
+{
+    if (!this->m_volume) {
+        return;
+    }
+
+    // Fill the view buffer.
+    const uint32_t width { this->surface_width() / 2 };
+    const uint32_t height { this->surface_height() };
+    const size_t size { static_cast<size_t>(width) * static_cast<size_t>(height) };
+
+    const glm::vec3 camera_offset { this->m_model_mat[3][0], this->m_model_mat[3][1], this->m_model_mat[3][2] };
+
+    std::vector<Color> view_buffer { width * height, Color {} };
+    const glm::vec3 camera_pos { this->m_view_pos - camera_offset };
+    const glm::vec3 camera_direction { glm::normalize(-this->m_view_pos) };
+    const glm::vec3 plane_right { glm::cross(camera_direction, glm::vec3(0.0f, 0.0f, 1.0f)) };
+    const glm::vec3 plane_up { glm::cross(plane_right, camera_direction) };
+    const float step_size { this->m_ray_casting_step_size };
+    constexpr float view_plane_distance { 0.001f };
+    constexpr float field_of_view { 70.0f };
+    this->compute_ray_casting(*this->m_volume, view_buffer, camera_pos, camera_direction, plane_right,
+        plane_up, width, height, step_size, view_plane_distance, field_of_view);
+
+    // Copy view buffer to the texture.
+    wgpu::Device& device { this->device() };
+    wgpu::Queue queue { device.getQueue() };
+
+    wgpu::ImageCopyTexture destination { wgpu::Default };
+    destination.texture = this->m_ray_casting_texture;
+    destination.mipLevel = 0;
+    destination.origin = wgpu::Origin3D { 0, 0, 0 };
+    destination.aspect = wgpu::TextureAspect::All;
+    wgpu::TextureDataLayout data_layout { wgpu::Default };
+    data_layout.offset = 0;
+    data_layout.bytesPerRow = width * 4;
+    data_layout.rowsPerImage = height;
+    wgpu::Extent3D write_size { width, height, 1 };
+    queue.writeTexture(destination, &view_buffer.data()->r, 4 * size, data_layout, write_size);
 }
 
 float Application::interpolate_trilinear(VoxelCell cell, float t_x, float t_y, float t_z) const
@@ -2188,4 +2441,11 @@ ExtremaGraph<2> Application::compute_extrema_graph(std::span<const float> sample
         }
     }
     return ExtremaGraph<2> { extrema };
+}
+
+void Application::compute_ray_casting(const PVMVolume& volume, std::span<Color> view_buffer,
+    glm::vec3 camera_position, glm::vec3 camera_direction, glm::vec3 plane_right,
+    glm::vec3 plane_up, uint32_t width, uint32_t height, float step_size,
+    float view_plane_distance, float field_of_view) const
+{
 }
